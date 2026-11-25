@@ -36,7 +36,7 @@ os.environ["QT_PLUGIN_PATH"] = qt_plugin_root
 os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = os.path.join(qt_plugin_root, "platforms")
 
 from PyQt5.QtCore import Qt, QSize, QTimer
-from PyQt5.QtGui import QMovie
+from PyQt5.QtGui import QMovie, QPixmap
 from PyQt5.QtWidgets import QAction, QApplication, QLabel, QMenu, QWidget
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -48,6 +48,7 @@ def frame(name):
 
 
 IDLE_FRAME = frame("01_idle")
+RUN_FRAME = frame("02_run")
 ACTION_FRAMES = {
     "laugh": frame("05_laugh"),
     "shy": frame("07_greet"),
@@ -68,7 +69,6 @@ GESTURE_ACTION = {
     "fist": "laugh",
     "open": "cry",
     "ok": "shy",
-    "heart1": "clap",
     "heart2": "cheer",
     "thumbsdown": "turn",
 }
@@ -84,6 +84,8 @@ WINDOW_W = 200
 WINDOW_H = 220
 FRAME_SIZE = 180
 LOOPS_PER_ACTION = 3
+RUN_INTERVAL = 83
+FOLLOW_INTERVAL = 16
 
 
 class GestureProc(object):
@@ -167,6 +169,12 @@ class DesktopPet(QWidget):
         self.label.setAlignment(Qt.AlignCenter)
         self.label.setAttribute(Qt.WA_TranslucentBackground)
 
+        self.run_label = QLabel(self)
+        self.run_label.setGeometry(0, 0, WINDOW_W, WINDOW_H)
+        self.run_label.setAlignment(Qt.AlignCenter)
+        self.run_label.setAttribute(Qt.WA_TranslucentBackground)
+        self.run_label.hide()
+
         self.movies = []
         self.movie = None
         self.current = None
@@ -177,6 +185,19 @@ class DesktopPet(QWidget):
         self.drag_offset = None
         self.pinch_pos = None
         self.last_xy = None
+        self.run_frames = None
+        self.run_mirrored = None
+        self.run_index = 0
+        self.following = False
+        self.facing_right = True
+        self.pos = (0.0, 0.0)
+        self.target = None
+        self.run_timer = QTimer(self)
+        self.run_timer.timeout.connect(self.on_run_tick)
+        self.run_timer.setInterval(RUN_INTERVAL)
+        self.follow_timer = QTimer(self)
+        self.follow_timer.timeout.connect(self.on_follow_tick)
+        self.follow_timer.setInterval(FOLLOW_INTERVAL)
 
         self.cv_mode = "rule"
         self.write_mode("rule")
@@ -219,6 +240,10 @@ class DesktopPet(QWidget):
     def set_movie(self, path, max_loops=None):
         if not os.path.isfile(path):
             return
+        self.run_timer.stop()
+        self.following = False
+        self.run_label.hide()
+        self.label.show()
         if self.movie is not None:
             self.movie.stop()
         movie = QMovie(path)
@@ -271,18 +296,95 @@ class DesktopPet(QWidget):
     def follow_finger(self, nx, ny):
         screen = QApplication.primaryScreen().geometry()
         tx, ty = nx * screen.width(), ny * screen.height()
-        if self.pinch_pos is None:
-            self.pinch_pos = (tx, ty)
+        cx = self.pos[0] + WINDOW_W / 2.0
+        if tx < cx - 20:
+            self.facing_right = False
+        elif tx > cx + 20:
+            self.facing_right = True
+        self.start_run()
+        if self.target is None:
+            self.target = (tx, ty)
         else:
-            sx, sy = self.pinch_pos
-            self.pinch_pos = (sx * 0.15 + tx * 0.85, sy * 0.15 + ty * 0.85)
-        px, py = self.pinch_pos
-        nx_ = int(px - WINDOW_W / 2)
-        ny_ = int(py - WINDOW_H / 2)
-        if self.last_xy is not None and abs(nx_ - self.last_xy[0]) < 2 and abs(ny_ - self.last_xy[1]) < 2:
+            sx, sy = self.target
+            self.target = (sx * 0.45 + tx * 0.55, sy * 0.45 + ty * 0.55)
+
+    def on_follow_tick(self):
+        if not self.following or self.target is None:
             return
-        self.last_xy = (nx_, ny_)
-        self.move(nx_, ny_)
+        screen = QApplication.primaryScreen().geometry()
+        max_x = screen.width() - WINDOW_W
+        max_y = screen.height() - WINDOW_H
+        k = 0.30
+        cap = 18.0
+        dx = (self.target[0] - WINDOW_W / 2.0 - self.pos[0]) * k
+        dy = (self.target[1] - WINDOW_H / 2.0 - self.pos[1]) * k
+        dx = max(-cap, min(cap, dx))
+        dy = max(-cap, min(cap, dy))
+        self.pos = (self.pos[0] + dx, self.pos[1] + dy)
+        nx_ = max(0, min(int(round(self.pos[0])), max_x))
+        ny_ = max(0, min(int(round(self.pos[1])), max_y))
+        if nx_ != self.x() or ny_ != self.y():
+            self.move(nx_, ny_)
+
+    def load_run_frames(self):
+        if self.run_frames is not None:
+            return
+        right, left = [], []
+        movie = QMovie(RUN_FRAME)
+        movie.setScaledSize(QSize(FRAME_SIZE, FRAME_SIZE))
+        for i in range(movie.frameCount()):
+            movie.jumpToFrame(i)
+            img = movie.currentImage()
+            if img.isNull():
+                continue
+            right.append(QPixmap.fromImage(img))
+            left.append(QPixmap.fromImage(img.mirrored(True, False)))
+        self.run_frames = right
+        self.run_mirrored = left
+        self.run_index = 0
+
+    def start_run(self):
+        self.load_run_frames()
+        if not self.run_frames:
+            return
+        if self.following:
+            self.paint_run()
+            return
+        if self.movie is not None and self.movie.state() == QMovie.Running:
+            self.movie.stop()
+        self.following = True
+        self.run_index = 0
+        self.pos = (float(self.x()), float(self.y()))
+        self.target = None
+        self.label.hide()
+        self.run_label.show()
+        self.paint_run()
+        self.run_timer.start()
+        self.follow_timer.start()
+
+    def paint_run(self):
+        frames = self.run_frames if self.facing_right else self.run_mirrored
+        if not frames:
+            return
+        self.run_label.setPixmap(frames[self.run_index % len(frames)])
+
+    def on_run_tick(self):
+        if not self.following or not self.run_frames:
+            return
+        self.run_index = (self.run_index + 1) % len(self.run_frames)
+        self.paint_run()
+
+    def leave_follow(self):
+        self.run_timer.stop()
+        self.follow_timer.stop()
+        self.target = None
+        if not self.following:
+            return
+        self.following = False
+        self.run_label.hide()
+        self.label.show()
+        self.current = None
+        self.play_idle()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -366,7 +468,7 @@ class DesktopPet(QWidget):
         self.last_seq = -1
         self.pinch_pos = None
         self.last_xy = None
-        self.timer.start(30)
+        self.timer.start(20)
 
     def stop_gesture(self):
         self.timer.stop()
@@ -401,6 +503,7 @@ class DesktopPet(QWidget):
         if event in ("pinch", "follow"):
             self.follow_finger(float(data.get("x", 0.5)), float(data.get("y", 0.5)))
             return
+        self.leave_follow()
         self.pinch_pos = None
         self.last_xy = None
         if data.get("fire") and event in GESTURE_ACTION:
@@ -409,6 +512,7 @@ class DesktopPet(QWidget):
     def quit_pet(self):
         self.save_config()
         self.timer.stop()
+        self.run_timer.stop()
         self.gesture.raise_flag()
         self.gesture.kill_hard()
         self.gesture.clear_flag()

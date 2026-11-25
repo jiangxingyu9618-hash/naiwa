@@ -18,13 +18,14 @@ Rule mode is the default.
 | --- | --- |
 | Fist | 笑 |
 | Open palm | 哭 |
-| Thumb-index pinch | Follow your fingertips |
+| Thumb-index pinch | Runs after your fingertip and turns to face it |
+
+A one-hand heart does nothing on purpose.
 
 MLP mode, switched from the right-click menu.
 
 | Gesture | Action |
 | --- | --- |
-| One-hand heart | 拍手 |
 | Two-hand heart | 欢呼 |
 | OK | 害羞 |
 | Thumbs down | 转身 |
@@ -39,6 +40,6 @@ python pet.py
 python pet.py --gesture
 ```
 
-Recognition runs in a separate process (`gesture_service.py`); the main window polls its state file every 30 ms and restarts the service up to three times if it dies.
+Recognition runs in a separate process (`gesture_service.py`); the main window polls its state file every 20 ms and restarts the service up to three times if it dies.
 
 MIT
