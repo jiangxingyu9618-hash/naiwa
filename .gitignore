@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+*.log
+gesture_state.json*
+naiwa_config.json
+venv/
+.venv/
+runtime/
